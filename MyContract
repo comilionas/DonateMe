@@ -1,0 +1,164 @@
+using System;
+using Stratis.SmartContracts;
+
+/// <summary>
+/// This is a flexible Donation Smart Contract
+/// The Creater is able to collect donations with this Smart Contract
+/// 
+/// The donators have the following options:
+/// 1) Donate(): They send a certain amount as donation - there is no way back
+/// 2) DonateWithoutLockin(): The place a donation - but this donation dont gets locked in. The donator still has the option to 'withdraw' the donation. 
+///    The Donation is only parked in the smart contract. (Should be seen as an incentive - I am willing to donate but first show me something)
+/// 3) WithdrawDonation(): The donator is able to withdraw his not locked in donation
+/// 4) LockInDonations(): The donator is locking in his 'pending' donation
+/// 5) OwnerTransferDonations(Address address): The owner of the smart contract is able to move the donations to an other wallet
+/// </summary>
+[Deploy]
+public class MyContract : SmartContract
+{
+    public Address Owner
+    {
+        get
+        {
+            return this.PersistentState.GetAddress("Owner");
+        }
+        private set
+        {
+            this.PersistentState.SetAddress("Owner", value);
+        }
+    }
+
+    public ulong ActualLockedInDonations
+    {
+        get
+        {
+            return this.PersistentState.GetUInt64("ActualLockedInDonations");
+        }
+        private set
+        {
+            this.PersistentState.SetUInt64("ActualLockedInDonations", value);
+        }
+    }
+
+    public ulong ActualPendingInDonations
+    {
+        get
+        {
+            return this.PersistentState.GetUInt64("ActualPendingInDonations");
+        }
+        private set
+        {
+            this.PersistentState.SetUInt64("ActualPendingInDonations", value);
+        }
+    }
+
+    public ulong TotalLockedInDonations
+    {
+        get
+        {
+            return this.PersistentState.GetUInt64("TotalLockedInDonations");
+        }
+        private set
+        {
+            this.PersistentState.SetUInt64("TotalLockedInDonations", value);
+        }
+    }
+
+    public MyContract(ISmartContractState smartContractState)
+    : base(smartContractState)
+    {
+        this.Owner = this.Message.Sender;
+        Log(new Created { sender = Message.Sender.ToString() });
+    }
+
+    public ulong GetPendingDonationByAddress(Address address)
+    {
+        return this.PersistentState.GetUInt64($"PendingDonations[{address}]");
+    }
+
+    private void SetPendingDonationByAddress(Address address, ulong amount)
+    {
+        this.PersistentState.SetUInt64($"PendingDonations[{address}]", amount);
+    }
+
+    public void Donate()
+    {
+        Assert(this.Message.Value > 0);
+
+        ulong totalDonations = this.TotalLockedInDonations;
+        ulong actualDonations = this.ActualLockedInDonations;
+
+        ulong donation = this.Message.Value;
+
+        this.TotalLockedInDonations = totalDonations + donation;
+        this.ActualLockedInDonations = actualDonations + donation;
+    }
+
+    public void DonateWithoutLockin()
+    {
+        Assert(this.Message.Value > 0);
+
+        ulong currentPendingDonations = GetPendingDonationByAddress(this.Message.Sender);
+        ulong actualPendingDonations = this.ActualPendingInDonations;
+
+        ulong donation = this.Message.Value;
+
+        SetPendingDonationByAddress(this.Message.Sender, donation + currentPendingDonations);
+        this.ActualPendingInDonations = actualPendingDonations + donation;
+    }
+
+    public bool WithdrawDonation()
+    {
+        ulong amount = GetPendingDonationByAddress(this.Message.Sender);
+        ulong actualPendingDonations = this.ActualPendingInDonations;
+
+        Assert(amount > 0);
+        SetPendingDonationByAddress(this.Message.Sender, 0);
+        this.ActualPendingInDonations = actualPendingDonations - amount;
+        
+        ITransferResult transferResult = Transfer(this.Message.Sender, amount);
+        if (!transferResult.Success)
+        {
+            this.SetPendingDonationByAddress(this.Message.Sender, amount);
+            this.ActualPendingInDonations = actualPendingDonations;
+        }
+
+        return transferResult.Success;
+    }
+
+    public void LockInDonations()
+    {
+        ulong donationLockInAmountByAddress = GetPendingDonationByAddress(this.Message.Sender);
+
+        ulong totalDonations = this.TotalLockedInDonations;
+        ulong actualPendingDonations = this.ActualPendingInDonations;
+
+        this.TotalLockedInDonations = totalDonations + donationLockInAmountByAddress;
+        this.ActualPendingInDonations = actualPendingDonations - donationLockInAmountByAddress;
+
+        SetPendingDonationByAddress(this.Message.Sender, 0);
+    }
+
+    public bool OwnerTransferDonations(Address address)
+    {
+        Assert(this.Owner == this.Message.Sender);
+
+        ulong amount = this.ActualLockedInDonations;
+
+        this.ActualLockedInDonations = 0;
+
+        ITransferResult transferResult = Transfer(address, amount);
+        if (!transferResult.Success)
+        {
+            this.ActualLockedInDonations = amount;
+        }
+
+        return transferResult.Success;
+    }
+
+    public struct Created
+    {
+        [Index]
+        public string sender;
+    }
+}
